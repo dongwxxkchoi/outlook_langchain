@@ -34,8 +34,14 @@ sys.path.append('C:/Users/dwchoi0610/dongwook/langchain/outlook/outlook_pipeline
 
 os.environ['openai_api_key'] = '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'
 
-attachment_folder = 'C:/Temp/outlook/attachments'
-eml_folder = 'C:/Temp/outlook/eml'
+attachment_folder = 'attachments'
+
+
+def make_folders():
+    try:
+        os.makedirs('attachments')
+    except Exception:
+        print("attachment folder already created")
 
 
 def delete_files(folder:str, extension: str):
@@ -51,6 +57,42 @@ def fetch_outlook():
     return inbox.Items
 
 
+def export_data_win(items):
+    make_folders()
+    docs = list()
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+
+    for _, message in enumerate(items):    
+        body = unquote(message.Body)
+
+        # metadata
+        recipients_info = str()
+        for idx in range(message.Recipients.Count): 
+            recipient = message.Recipients.Item(idx+1)
+            recipients_info += f"{recipient.Name} <{recipient.Address}>, "
+
+        metadata = {
+            "Subject": str(message.Subject),
+            "From": f"{message.SenderName} <{message.SenderEmailAddress}>",
+            "To": recipients_info,
+            "Date": str(message.ReceivedTime.strftime("%a, %d %b %Y %H:%M:%S %z")),
+            "Attchment": False
+        }
+
+        # docs for body
+        docs.extend([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(body)])
+
+        # docs for attachments
+        for attachment in message.Attachments:
+            attachment_path = os.path.join(attachment_folder, attachment.FileName)
+            attachment.SaveAsFile(attachment_path)
+            filename = attachment.FileName
+            metadata['Attchment'] = filename
+            attachment_parsing(docs, attachment_path, filename, metadata, text_splitter)
+
+    return docs
+
+
 def pop_outlook():
     EMAIL_ADDRESS = "dwchoi0610@outlook.com"
     EMAIL_PASSWORD = "Outlookdongwook1!"
@@ -62,7 +104,7 @@ def pop_outlook():
     return Mailbox
 
 
-def decode_header(message):
+def decode_header_data(message):
     extracted, charset = email.header.decode_header(message)[0]
 
     # when encoding is specified
@@ -170,11 +212,8 @@ def parse_email_content(attachment_paths, msg):
         # get attached file content.
         attach_file_data = msg.get_payload(decode=True)
 
-        # get current script execution directory path. 
-        current_path = os.path.dirname(os.path.abspath(__file__))
-
         # get the attached file full path.
-        attach_file_path = current_path + '/' + attach_file_name
+        attach_file_path = attachment_folder + '/' + attach_file_name
 
         # write attached file content to the file.
         with open(attach_file_path,'wb') as f:
@@ -188,6 +227,7 @@ def parse_email_content(attachment_paths, msg):
 
 
 def export_data_pop(Mailbox):
+    make_folders()
     numMessages = len(Mailbox.list()[1])
     
     # langchain docs
@@ -199,10 +239,10 @@ def export_data_pop(Mailbox):
         msg = email.message_from_bytes(raw_email)
         
         # find header 
-        msg_subject = decode_header(msg['Subject'])
-        msg_from = decode_header(msg['From'])
-        msg_to = decode_header(msg['To'])
-        msg_date = decode_header(msg['Date'])
+        msg_subject = decode_header_data(msg['Subject'])
+        msg_from = decode_header_data(msg['From'])
+        msg_to = decode_header_data(msg['To'])
+        msg_date = decode_header_data(msg['Date'])
         msg_date = msg_date.replace('(UTC)', '').strip()
 
         metadata = {
@@ -244,18 +284,11 @@ def export_data_pop(Mailbox):
         parse_email_content(attachment_paths, msg)
 
         for attachment_path in attachment_paths:
-            filename = attachment_path
+            filename = attachment_path.split('/')[-1]
             metadata['Attchment'] = filename
             attachment_parsing(docs, attachment_path, filename, metadata, text_splitter)
 
     return docs
-
-
-def make_folders():
-    try:
-        os.makedirs('C:/Temp/outlook/attachments')
-    except Exception:
-        print("attachment folder already created")
 
 
 def attachment_parsing(docs, attachment_path, filename, metadata, text_splitter):
@@ -273,8 +306,6 @@ def attachment_parsing(docs, attachment_path, filename, metadata, text_splitter)
         docs.extend([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(text)])
 
     elif filename.endswith((".xlsx", ".xls")):
-        df = pd.read_excel(attachment_path)
-
         import openpyxl
         def is_row_empty(row):
             return all(cell is None or cell == '' for cell in row)
@@ -328,69 +359,37 @@ def attachment_parsing(docs, attachment_path, filename, metadata, text_splitter)
                 attachment_parsing(docs, attachment_path, file, metadata, text_splitter)
 
     elif filename.endswith(".txt"):
-        loader = TextLoader(attachment_path)
-        loaded = loader.load()
-        for i, doc in enumerate(loaded):
-            loaded[i].metadata.update(metadata)
-        docs.extend(loaded)
+        with open(attachment_path, "r", encoding='utf-8') as f:
+            text = f.read()
+        
+        docs.extend([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(text)])
 
     else:
         pass
 
 
-def export_data_win(items):
-    make_folders()
-    docs = list()
-    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+def main(has_app):
+    # Outlook Application is possible
+    if has_app:
+        items = fetch_outlook()
+        docs = export_data_win(items)
+    # If not possible
+    else:
+        Mailbox = pop_outlook()
+        docs = export_data_pop(Mailbox)
 
-    for _, message in enumerate(items):    
-        body = unquote(message.Body)
-
-        # metadata
-        recipients_info = str()
-        for idx in range(message.Recipients.Count): 
-            recipient = message.Recipients.Item(idx+1)
-            recipients_info += f"{recipient.Name} <{recipient.Address}>, "
-
-        metadata = {
-            "Subject": str(message.Subject),
-            "From": f"{message.SenderName} <{message.SenderEmailAddress}>",
-            "To": recipients_info,
-            "Date": str(message.ReceivedTime.strftime("%a, %d %b %Y %H:%M:%S %z")),
-            "Attchment": False
-        }
-
-        # docs for body
-        docs.extend([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(body)])
-
-        # docs for attachments
-        for attachment in message.Attachments:
-            attachment_path = os.path.join(attachment_folder, attachment.FileName)
-            attachment.SaveAsFile(attachment_path)
-            filename = attachment.FileName
-            metadata['Attchment'] = filename
-            attachment_parsing(docs, attachment_path, filename, metadata, text_splitter)
-
-    return docs
-
-
+    # Embedding
+    embeddings = OpenAIEmbeddings()
+    vectordb = Chroma.from_documents(documents=docs, 
+                               embedding=embeddings,
+                               collection_name="outlooks",
+                               persist_directory="chroma_folder")
+    
+    # Store vectorDB on local file system
+    vectordb.persist()
 
 
 if __name__ == "__main__":
-    Mailbox = pop_outlook()
-    docs = export_data_pop(Mailbox)
-    for doc in docs:
-        print(docs)
-    
-    # items = fetch_outlook()
-    # docs = export_data_win(items)
-
-    # embeddings = OpenAIEmbeddings()
-
-    # vectordb = Chroma.from_documents(documents=docs, 
-    #                            embedding=embeddings,
-    #                            collection_name="outlooks",
-    #                            persist_directory="chroma_folder")
-    
-    # vectordb.persist()
+    has_app = True
+    main(has_app)
     

@@ -1,7 +1,2 @@
-src/*.xlsx
-src/*.txt
-src/*.json
-src/*.hwp
-src/*.pdf
-src/*.csv
+src/attachments
 utils/__pycache__
