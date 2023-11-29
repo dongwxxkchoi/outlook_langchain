@@ -9,3 +9,4 @@ chromadb
 openai
 tiktoken
 cryptography
+openpyxl

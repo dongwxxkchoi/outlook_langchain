@@ -37,6 +37,7 @@ os.environ['openai_api_key'] = 'sk-rUWTaDqzNwY0ft5HEKyKT3BlbkFJYaxLxgeCVuKLssBDT
 attachment_folder = 'C:/Temp/outlook/attachments'
 eml_folder = 'C:/Temp/outlook/eml'
 
+
 def delete_files(folder:str, extension: str):
     for f in glob.glob(f"{folder}/*.{extension}"):
         os.remove(f)
@@ -181,14 +182,12 @@ def parse_email_content(attachment_paths, msg):
         
         print('attached file is saved in path ' + attach_file_path)   
         attachment_paths.append(attach_file_path)
-                
+
     else:
         content = msg.as_string()
-        print(content)
 
 
-def export_data_pop():
-    Mailbox = pop_outlook()
+def export_data_pop(Mailbox):
     numMessages = len(Mailbox.list()[1])
     
     # langchain docs
@@ -204,13 +203,14 @@ def export_data_pop():
         msg_from = decode_header(msg['From'])
         msg_to = decode_header(msg['To'])
         msg_date = decode_header(msg['Date'])
+        msg_date = msg_date.replace('(UTC)', '').strip()
 
         metadata = {
             "Subject": str(msg_subject),
             "From": str(msg_from),
             "To": str(msg_to),
-            "Date": str(datetime.strptime(msg_date, "%a, %d %b %Y %H:%M:%S %z")),
-            "Attchment": False
+            "Date": str(datetime.strptime(msg_date, "%a, %d %b %Y %H:%M:%S %z")).strip(),
+            "Attachment": False
         }
 
         # find body
@@ -225,7 +225,6 @@ def export_data_pop():
                     charset = part.get_content_charset()
                     break
 
-                # 아니라면, msg 전체적으로 payload 호출해서 넘겨줌
                 body = msg.get_payload(decode=True)
                 charset = part.get_content_charset()
         else:
@@ -238,11 +237,18 @@ def export_data_pop():
         except Exception:
             msg_body = parse_email_body(msg)
 
-        docs.extend([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(body)])
+        docs.extend([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(msg_body)])
 
         # find attachment
         attachment_paths= []
-        msg_attachments = parse_email_content(attachment_paths, msg)
+        parse_email_content(attachment_paths, msg)
+
+        for attachment_path in attachment_paths:
+            filename = attachment_path
+            metadata['Attchment'] = filename
+            attachment_parsing(docs, attachment_path, filename, metadata, text_splitter)
+
+    return docs
 
 
 def make_folders():
@@ -259,47 +265,49 @@ def attachment_parsing(docs, attachment_path, filename, metadata, text_splitter)
         loaded = loader.load()
         for i, doc in enumerate(loaded):
             loaded[i].metadata.update(metadata)
-
-        if isinstance(loaded[0], list):
-            print(filename)
-        
         docs.extend(loaded)
 
     elif filename.endswith((".docx", ".doc")):
         doc = docx.Document(attachment_path)
         text = ' '.join([paragraph.text for paragraph in doc.paragraphs])
-        
-        if isinstance([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(text)][0], list):
-            print(filename)
-        
         docs.extend([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(text)])
 
     elif filename.endswith((".xlsx", ".xls")):
         df = pd.read_excel(attachment_path)
-        filename = filename.split('.')[0]+".txt"
-        txt_path = attachment_path.split('.')[0] + ".txt"
-        df.to_csv(txt_path, sep='\t', index=False, encoding='cp949')
-        attachment_parsing(docs, txt_path, filename, metadata, text_splitter)
 
+        import openpyxl
+        def is_row_empty(row):
+            return all(cell is None or cell == '' for cell in row)
+        
+        workbook = openpyxl.load_workbook(attachment_path)
+        blank_row_count = 0
+        text = ""
+        for sheet_name in workbook.sheetnames:
+            print(f"--- Sheet: {sheet_name} ---")
+            sheet = workbook[sheet_name]
+
+            for row in sheet.iter_rows(values_only=True):
+                if is_row_empty(row):
+                    blank_row_count += 1
+                if blank_row_count > 100:
+                    break
+            
+                row_values = [str(cell) if cell is not None else '' for cell in row]
+                text += ','.join(row_values)
+        
+        docs.extend([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(text)])
+    
     elif filename.endswith(".csv"):
         loader = CSVLoader(attachment_path)
         loaded = loader.load()
         for i, doc in enumerate(loaded):
             loaded[i].metadata.update(metadata)
-
-        if isinstance(loaded[0], list):
-            print(filename)
-        
         docs.extend(loaded)
 
     elif filename.endswith(".hwp"):
         f = olefile.OleFileIO(attachment_path)  
         encoded_text = f.openstream('PrvText').read() 
         decoded_text = encoded_text.decode('utf-16')
-
-        if isinstance([Document(page_content=x, metadata = metadata) for x in text_splitter.split_text(decoded_text)][0], list):
-            print(filename)
-        
         docs.extend([Document(page_content=x, metadata=metadata) for x in text_splitter.split_text(decoded_text)])
 
     elif filename.endswith((".pptx", ".ppt")):
@@ -309,9 +317,6 @@ def attachment_parsing(docs, attachment_path, filename, metadata, text_splitter)
             for shape in slide.shapes:
                 if hasattr(shape, 'text'):
                     text += shape.text + '\n'
-        if isinstance([Document(page_content=x, metadata=metadata) for x in text_splitter.split_text(text)][0], list):
-            print(filename)
-        
         docs.extend([Document(page_content=x, metadata=metadata) for x in text_splitter.split_text(text)])
 
     elif filename.endswith(".zip"):
@@ -327,10 +332,6 @@ def attachment_parsing(docs, attachment_path, filename, metadata, text_splitter)
         loaded = loader.load()
         for i, doc in enumerate(loaded):
             loaded[i].metadata.update(metadata)
-        
-        if isinstance(loaded[0], list):
-            print(filename)
-        
         docs.extend(loaded)
 
     else:
@@ -376,9 +377,13 @@ def export_data_win(items):
 
 
 if __name__ == "__main__":
-    # export_data_pop()
-    items = fetch_outlook()
-    docs = export_data_win(items)
+    Mailbox = pop_outlook()
+    docs = export_data_pop(Mailbox)
+    for doc in docs:
+        print(docs)
+    
+    # items = fetch_outlook()
+    # docs = export_data_win(items)
 
     # embeddings = OpenAIEmbeddings()
 

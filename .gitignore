@@ -3,4 +3,5 @@ src/*.txt
 src/*.json
 src/*.hwp
 src/*.pdf
+src/*.csv
 utils/__pycache__
