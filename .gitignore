@@ -1,0 +1,6 @@
+src/*.xlsx
+src/*.txt
+src/*.json
+src/*.hwp
+src/*.pdf
+utils/__pycache__

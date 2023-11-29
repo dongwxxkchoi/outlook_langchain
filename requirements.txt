@@ -1,10 +1,11 @@
 langchain
 olefile
+pandas
 pywin32
 pypdf
 python-docx
 python-pptx
 chromadb
-zipfile
 openai
 tiktoken
+cryptography
